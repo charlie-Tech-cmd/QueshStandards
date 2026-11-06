@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% block title %}{% if channel.kind == "direct" %}{{ channel_title }}{% else %}#{{ channel.name }}{% endif %} · NexaWork{% endblock %}
+{% block breadcrumb %}<a href="{% url 'channel_list' %}">Channels</a> <span>/</span> {% if channel.kind == "direct" %}{{ channel_title }}{% else %}#{{ channel.name }}{% endif %}{% endblock %}
+{% block content %}
+<div class="page-heading channel-heading"><div><div class="eyebrow">{{ channel.get_kind_display|upper }}{% if channel.kind != "direct" %} CHANNEL{% endif %}</div><h1>{% if channel.kind != "direct" %}<span class="channel-hash">#</span>{% endif %}{{ channel_title|default:channel.name }}</h1><p class="muted">{{ channel.description|default:"Share an update or join the conversation." }}</p></div></div>
+<section class="chat-panel">
+  <div class="chat-toolbar"><span><i class="online-dot"></i> Workspace conversation</span><span id="connection-status">Live updates on</span></div>
+  <div id="chat-messages" class="chat-messages" data-endpoint="{% url 'channel_messages' channel.id %}" data-websocket="/ws/channels/{{ channel.id }}/">
+    {% for message in chat_messages %}
+      <article class="chat-message {% if message.author_id == user.id %}mine{% endif %}" data-message-id="{{ message.id }}">
+        <span class="avatar chat-avatar">{{ message.author.first_name|default:message.author.employee_id|slice:":1"|upper }}</span>
+        <div class="chat-bubble"><div class="chat-meta"><strong>{{ message.author.get_full_name|default:message.author.employee_id }}</strong><time>{{ message.created_at|date:"g:i A" }}</time></div><p>{{ message.body }}</p></div>
+      </article>
+    {% empty %}
+      <div class="chat-empty">This is the beginning of <strong>#{{ channel.name }}</strong>. Say hello to your team.</div>
+    {% endfor %}
+  </div>
+  <form method="post" class="chat-compose">{% csrf_token %}<label class="sr-only" for="message-body">Write a message</label><textarea id="message-body" name="body" maxlength="4000" rows="1" placeholder="Message {% if channel.kind == 'direct' %}{{ channel_title }}{% else %}#{{ channel.name }}{% endif %}" required></textarea><button class="send-button" type="submit" aria-label="Send message">↑</button></form>
+</section>
+<script>
+(() => {
+  const list = document.getElementById("chat-messages");
+  const form = document.querySelector(".chat-compose");
+  const input = document.getElementById("message-body");
+  const status = document.getElementById("connection-status");
+  const renderMessage = item => {
+    if (item.id && list.querySelector(`[data-message-id="${item.id}"]`)) return;
+    list.querySelector(".chat-empty")?.remove();
+    const row = document.createElement("article");
+    row.className = `chat-message${item.mine ? " mine" : ""}`;
+    if (item.id) row.dataset.messageId = item.id;
+    const avatar = document.createElement("span");
+    avatar.className = "avatar chat-avatar";
+    avatar.textContent = item.author.slice(0, 1).toUpperCase();
+    const bubble = document.createElement("div");
+    bubble.className = "chat-bubble";
+    const meta = document.createElement("div");
+    meta.className = "chat-meta";
+    const author = document.createElement("strong");
+    author.textContent = item.author;
+    const time = document.createElement("time");
+    time.textContent = item.created_at;
+    const body = document.createElement("p");
+    body.textContent = item.body;
+    meta.append(author, time);
+    bubble.append(meta, body);
+    row.append(avatar, bubble);
+    list.append(row);
+    list.scrollTop = list.scrollHeight;
+  };
+  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+  const socket = new WebSocket(`${protocol}//${window.location.host}${list.dataset.websocket}`);
+  socket.addEventListener("open", () => { status.textContent = "Live updates on"; });
+  socket.addEventListener("close", () => { status.textContent = "Disconnected — refresh to reconnect"; });
+  socket.addEventListener("error", () => { status.textContent = "Connection error"; });
+  socket.addEventListener("message", event => {
+    const data = JSON.parse(event.data);
+    if (data.type === "message.created") renderMessage(data);
+    if (data.type === "typing") status.textContent = data.typing ? `${data.name} is typing…` : "Live updates on";
+    if (data.type === "user.online") status.textContent = `${data.name} is online`;
+  });
+  form.addEventListener("submit", event => {
+    if (socket.readyState !== WebSocket.OPEN) return;
+    event.preventDefault();
+    const body = input.value.trim();
+    if (!body) return;
+    socket.send(JSON.stringify({type: "message.send", body}));
+    input.value = "";
+  });
+  let typingTimer;
+  input.addEventListener("input", () => {
+    if (socket.readyState !== WebSocket.OPEN) return;
+    socket.send(JSON.stringify({type: "typing.started"}));
+    window.clearTimeout(typingTimer);
+    typingTimer = window.setTimeout(() => socket.send(JSON.stringify({type: "typing.stopped"})), 900);
+  });
+  list.scrollTop = list.scrollHeight;
+})();
+</script>
+{% endblock %}
